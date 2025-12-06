@@ -1,17 +1,180 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import axios from 'axios';
+import { functionDeclarations, executeFunction } from './functions';
 
-dotenv.config();
+dotenv.config({ path: '../../.env' });
 
 const app = express();
 const PORT = process.env.PORT || 3003;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 app.use(cors());
 app.use(express.json());
 
+app.get('/health', (req, res) => {
+    res.json({ status: 'ok', service: 'ai-service' });
+});
 
+app.post('/api/chat', async (req, res) => {
+    try {
+        const { message, history = [] } = req.body;
+        if (!message) {
+            return res.status(400).json({ error: 'Message is required' });
+        }
+
+        const toolDescriptions = functionDeclarations.map(fn =>
+            `- ${fn.name}: ${fn.description}\n  Parameters: ${JSON.stringify(fn.parameters.properties)}`
+        ).join('\n');
+
+        // Build conversation history string
+        const historyText = history.length > 0
+            ? '\n\nCHAT HISTORY:\n' + history.map((msg: any) =>
+                `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`
+            ).join('\n')
+            : '';
+
+        const fullPrompt = `You are an AI assistant for RFP management with access to these tools:
+
+${toolDescriptions}
+
+CRITICAL INSTRUCTIONS:
+1. When you need data from a tool, respond with JSON: {"type": "tool_call", "tool": "toolName", "args": {...}}
+2. When giving final answer to user, respond with JSON: {"type": "response", "message": "your message here"}
+3. NEVER make up data - always use tools to get real information
+4. Be conversational and helpful in your final responses
+5. Extract structured data from natural language when creating RFPs or vendors
+
+Examples:
+User: "Show me all vendors"
+You: {"type": "tool_call", "tool": "listVendors", "args": {}}
+
+User: "Add vendor Acme Corp, email acme@example.com"
+You: {"type": "tool_call", "tool": "createVendor", "args": {"name": "Acme Corp", "email": "acme@example.com"}}
+
+After tool results, give friendly response:
+You: {"type": "response", "message": "I found 5 vendors in the system: ..."}
+
+IMPORTANT: Your response must ONLY be valid JSON. Start with "{" and end with "}". No other text.
+${historyText}
+
+CURRENT USER MESSAGE: ${message}
+
+Respond with JSON only:`;
+
+        let finalReply: any = null;
+        let maxIterations = 10;
+
+        for (let i = 0; i < maxIterations; i++) {
+            const response = await axios.post(
+                `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+                {
+                    contents: [{
+                        role: 'user',
+                        parts: [{ text: fullPrompt }]
+                    }]
+                },
+                { headers: { 'Content-Type': 'application/json' } }
+            );
+
+            const candidate = response.data.candidates?.[0];
+            if (!candidate) {
+                console.log('No candidate');
+                break;
+            }
+
+            const aiText = candidate.content.parts[0]?.text || '';
+            console.log('AI raw response:', aiText);
+
+            let aiResponse;
+            try {
+                aiResponse = JSON.parse(aiText);
+            } catch (e) {
+                console.error('Failed to parse JSON:', aiText);
+                aiResponse = { type: 'response', message: aiText };
+            }
+
+            console.log(`[${i + 1}] type=${aiResponse.type}`);
+
+            if (aiResponse.type === 'tool_call') {
+                console.log(`Executing: ${aiResponse.tool}`, aiResponse.args);
+                const toolResult = await executeFunction(aiResponse.tool, aiResponse.args || {});
+                console.log(`Result:`, toolResult);
+
+                // Add to history for next iteration
+                history.push({ role: 'assistant', content: JSON.stringify(aiResponse) });
+                history.push({ role: 'user', content: `Tool result: ${JSON.stringify(toolResult)}` });
+
+                // Rebuild prompt with updated history
+                const newHistoryText = '\n\nCHAT HISTORY:\n' + history.map((msg: any) =>
+                    `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`
+                ).join('\n');
+
+                const newPrompt = `You are an AI assistant for RFP management with access to these tools:
+
+${toolDescriptions}
+
+CRITICAL INSTRUCTIONS:
+1. When you need data from a tool, respond with JSON: {"type": "tool_call", "tool": "toolName", "args": {...}}
+2. When giving final answer to user, respond with JSON: {"type": "response", "message": "your message here"}
+3. NEVER make up data - always use tools to get real information
+4. Be conversational and helpful in your final responses
+
+IMPORTANT: Your response must ONLY be valid JSON. Start with "{" and end with "}". No other text.
+${newHistoryText}
+
+Now provide a friendly response to the user about the tool result with type "response".
+
+Respond with JSON only:`;
+
+                // Update fullPrompt for next iteration
+                const nextResponse = await axios.post(
+                    `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+                    {
+                        contents: [{
+                            role: 'user',
+                            parts: [{ text: newPrompt }]
+                        }]
+                    },
+                    { headers: { 'Content-Type': 'application/json' } }
+                );
+
+                const nextCandidate = nextResponse.data.candidates?.[0];
+                if (!nextCandidate) break;
+
+                const nextText = nextCandidate.content.parts[0]?.text || '';
+                console.log('AI response after tool:', nextText);
+
+                try {
+                    aiResponse = JSON.parse(nextText);
+                } catch (e) {
+                    aiResponse = { type: 'response', message: nextText };
+                }
+            }
+
+            if (aiResponse.type === 'response') {
+                finalReply = aiResponse;
+                console.log('Final:', finalReply.message);
+                break;
+            }
+        }
+
+        if (!finalReply) {
+            finalReply = { type: 'response', message: 'I apologize, but I was unable to generate a response.' };
+        }
+
+        res.json(finalReply);
+    } catch (error: any) {
+        console.error('Chat error:', error.response?.data || error.message);
+        res.status(500).json({
+            type: 'error',
+            message: 'Failed to process message',
+            error: error.message
+        });
+    }
+});
 
 app.listen(PORT, () => {
-    console.log(`running on port ${PORT}`);
+    console.log(`AI Service running on port ${PORT}`);
 });

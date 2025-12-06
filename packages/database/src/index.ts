@@ -1,5 +1,12 @@
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
+import dotenv from 'dotenv';
+
+/*
+Load environment variables from monorepo root
+*/
+dotenv.config({ path: '../../.env' });
+
 
 const globalForPrisma = globalThis as unknown as {
     prisma: PrismaClient | undefined;
