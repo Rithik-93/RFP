@@ -155,6 +155,34 @@ app.get('/api/conversations/:id', async (req: Request, res: Response) => {
 });
 
 
+app.post('/api/rfps/direct', async (req: Request, res: Response) => {
+    try {
+        const { title, description, requirements, budget, currency, deliveryDeadline, paymentTerms, createdBy } = req.body;
+
+        if (!title || !description || !budget || !deliveryDeadline) {
+            return res.status(400).json({ error: 'title, description, budget, and deliveryDeadline required' });
+        }
+
+        const rfp = await prisma.rFP.create({
+            data: {
+                title,
+                description,
+                requirements: requirements || [],
+                budget: parseFloat(budget),
+                currency: currency || 'USD',
+                deliveryDeadline: new Date(deliveryDeadline),
+                paymentTerms: paymentTerms || undefined,
+                createdBy: createdBy || undefined,
+                status: 'DRAFT',
+            },
+        });
+
+        res.json({ success: true, rfp });
+    } catch (error: any) {
+        console.error('Direct create RFP error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
 
 app.post('/api/rfps', async (req: Request, res: Response) => {
     try {

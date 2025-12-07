@@ -28,7 +28,6 @@ app.post('/api/chat', async (req, res) => {
             `- ${fn.name}: ${fn.description}\n  Parameters: ${JSON.stringify(fn.parameters.properties)}`
         ).join('\n');
 
-        // Build conversation history string
         const historyText = history.length > 0
             ? '\n\nCHAT HISTORY:\n' + history.map((msg: any) =>
                 `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`
@@ -46,17 +45,22 @@ CRITICAL INSTRUCTIONS:
 4. Be conversational and helpful in your final responses
 5. Extract structured data from natural language when creating RFPs or vendors
 
+CRITICAL: Your response will be parsed with JSON.parse(). Do NOT wrap it in markdown code blocks. Just return the raw JSON object.
+
 Examples:
 User: "Show me all vendors"
 You: {"type": "tool_call", "tool": "listVendors", "args": {}}
 
 User: "Add vendor Acme Corp, email acme@example.com"
-You: {"type": "tool_call", "tool": "createVendor", "args": {"name": "Acme Corp", "email": "acme@example.com"}}
+You: {"type": "tool_call", "tool": "createVendors", "args": {"vendors": [{"name": "Acme Corp", "email": "acme@example.com"}]}}
 
-After tool results, give friendly response:
-You: {"type": "response", "message": "I found 5 vendors in the system: ..."}
+User: "Add vendors Apple and Microsoft with emails apple@example.com and microsoft@example.com"
+You: {"type": "tool_call", "tool": "createVendors", "args": {"vendors": [{"name": "Apple", "email": "apple@example.com"}, {"name": "Microsoft", "email": "microsoft@example.com"}]}}
 
-IMPORTANT: Your response must ONLY be valid JSON. Start with "{" and end with "}". No other text.
+User: "Create RFP for laptops, budget 100k INR, deadline Dec 31, send to dell@gmail.com"
+You: {"type": "tool_call", "tool": "createRFPs", "args": {"rfps": [{"title": "Laptop Procurement", "description": "...", "budget": 100000, "currency": "INR", "deliveryDeadline": "2023-12-31T23:59:59Z", "vendorEmails": ["dell@gmail.com"]}]}}
+
+REMINDER: Return ONLY the JSON object. No markdown, no code blocks, no explanation.
 ${historyText}
 
 CURRENT USER MESSAGE: ${message}
@@ -84,15 +88,25 @@ Respond with JSON only:`;
                 break;
             }
 
-            const aiText = candidate.content.parts[0]?.text || '';
-            console.log('AI raw response:', aiText);
+            let aiText = candidate.content.parts[0]?.text || '';
+
+            aiText = aiText.trim();
+            if (aiText.startsWith('```json')) {
+                aiText = aiText.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+            } else if (aiText.startsWith('```')) {
+                aiText = aiText.replace(/^```\s*/, '').replace(/\s*```$/, '');
+            }
 
             let aiResponse;
             try {
                 aiResponse = JSON.parse(aiText);
             } catch (e) {
-                console.error('Failed to parse JSON:', aiText);
-                aiResponse = { type: 'response', message: aiText };
+                try {
+                    const escapedText = aiText.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+                    aiResponse = JSON.parse(escapedText);
+                } catch (e2) {
+                    aiResponse = { type: 'response', message: aiText };
+                }
             }
 
             console.log(`[${i + 1}] type=${aiResponse.type}`);
@@ -102,11 +116,9 @@ Respond with JSON only:`;
                 const toolResult = await executeFunction(aiResponse.tool, aiResponse.args || {});
                 console.log(`Result:`, toolResult);
 
-                // Add to history for next iteration
                 history.push({ role: 'assistant', content: JSON.stringify(aiResponse) });
                 history.push({ role: 'user', content: `Tool result: ${JSON.stringify(toolResult)}` });
 
-                // Rebuild prompt with updated history
                 const newHistoryText = '\n\nCHAT HISTORY:\n' + history.map((msg: any) =>
                     `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`
                 ).join('\n');
@@ -121,6 +133,8 @@ CRITICAL INSTRUCTIONS:
 3. NEVER make up data - always use tools to get real information
 4. Be conversational and helpful in your final responses
 
+CRITICAL: Your response will be parsed with JSON.parse(). Do NOT wrap it in markdown code blocks. Just return the raw JSON object.
+
 IMPORTANT: Your response must ONLY be valid JSON. Start with "{" and end with "}". No other text.
 ${newHistoryText}
 
@@ -128,7 +142,6 @@ Now provide a friendly response to the user about the tool result with type "res
 
 Respond with JSON only:`;
 
-                // Update fullPrompt for next iteration
                 const nextResponse = await axios.post(
                     `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
                     {
@@ -143,13 +156,24 @@ Respond with JSON only:`;
                 const nextCandidate = nextResponse.data.candidates?.[0];
                 if (!nextCandidate) break;
 
-                const nextText = nextCandidate.content.parts[0]?.text || '';
-                console.log('AI response after tool:', nextText);
+                let nextText = nextCandidate.content.parts[0]?.text || '';
+
+                nextText = nextText.trim();
+                if (nextText.startsWith('```json')) {
+                    nextText = nextText.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+                } else if (nextText.startsWith('```')) {
+                    nextText = nextText.replace(/^```\s*/, '').replace(/\s*```$/, '');
+                }
 
                 try {
                     aiResponse = JSON.parse(nextText);
                 } catch (e) {
-                    aiResponse = { type: 'response', message: nextText };
+                    try {
+                        const escapedNext = nextText.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+                        aiResponse = JSON.parse(escapedNext);
+                    } catch (e2) {
+                        aiResponse = { type: 'response', message: nextText };
+                    }
                 }
             }
 
@@ -166,11 +190,12 @@ Respond with JSON only:`;
 
         res.json(finalReply);
     } catch (error: any) {
-        console.error('Chat error:', error.response?.data || error.message);
+        const errorMsg = error.response?.data?.error || error.message || 'Unknown error';
+        console.error('Chat error:', errorMsg);
         res.status(500).json({
             type: 'error',
             message: 'Failed to process message',
-            error: error.message
+            error: errorMsg
         });
     }
 });
