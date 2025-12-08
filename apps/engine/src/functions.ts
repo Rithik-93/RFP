@@ -3,7 +3,7 @@ import { prisma } from '@rfp/database';
 export const functionDeclarations = [
     {
         name: 'listVendors',
-        description: 'Get all vendors from the database',
+        description: 'Get all vendors from the database. Use this to find vendor emai mentions vendor names or says "send to all vendors".',
         parameters: {
             type: 'object',
             properties: {},
@@ -12,7 +12,7 @@ export const functionDeclarations = [
     },
     {
         name: 'createVendors',
-        description: 'Add one or more vendors to the database',
+        description: 'Add one or more vendors to the database. Returns the created vendor details including emails which you can use in generateRFPEmailPreview.',
         parameters: {
             type: 'object',
             properties: {
@@ -45,7 +45,7 @@ export const functionDeclarations = [
     },
     {
         name: 'createRFPs',
-        description: 'Create one or more RFPs as DRAFT (they need to be sent separately)',
+        description: 'Create one or more RFPs as DRAFT (they need to be sent separately). IMPORTANT: Generate the title and description yourself based on what the user is asking for - DO NOT ask the user for these. Infer reasonable values from context. Returns the created RFP IDs which you MUST use in subsequent calls like generateRFPEmailPreview.',
         parameters: {
             type: 'object',
             properties: {
@@ -54,15 +54,15 @@ export const functionDeclarations = [
                     items: {
                         type: 'object',
                         properties: {
-                            title: { type: 'string', description: 'RFP title' },
-                            description: { type: 'string', description: 'RFP description' },
+                            title: { type: 'string', description: 'RFP title - auto-generate from user request if not provided' },
+                            description: { type: 'string', description: 'RFP description - auto-generate from user request if not provided' },
                             requirements: { type: 'object', description: 'Structured requirements as key-value pairs, e.g. {ram: "16GB", storage: "256GB SSD", gpu: "NVIDIA RTX",...etc etc}' },
                             budget: { type: 'number', description: 'Budget amount' },
-                            currency: { type: 'string', description: 'Currency code (e.g., USD, INR)' },
+                            currency: { type: 'string', description: 'Currency code (e.g., USD, INR), defaults to USD' },
                             deliveryDeadline: { type: 'string', description: 'Deadline in ISO format' },
                             createdBy: { type: 'string', description: 'Creator identifier' }
                         },
-                        required: ['title', 'description', 'budget', 'deliveryDeadline']
+                        required: ['budget', 'deliveryDeadline']
                     },
                     description: 'Array of RFPs to create'
                 }
@@ -72,7 +72,7 @@ export const functionDeclarations = [
     },
     {
         name: 'generateRFPEmailPreview',
-        description: 'Generate a preview of the RFP email to be sent to vendors. Shows the email content with negotiation insights from past deals. User can review and request changes before sending.',
+        description: 'Generate a preview of the RFP email to be sent to vendors. Shows the email content with negotiation insights from past deals. User can review and request changes before sending. IMPORTANT: Use the actual RFP ID from the createRFPs response, not a placeholder. If user says "send to vendors" or mentions vendor names, look up their emails using listVendors first.',
         parameters: {
             type: 'object',
             properties: {
@@ -109,7 +109,7 @@ export const functionDeclarations = [
     },
     {
         name: 'listRFPReplies',
-        description: 'Get ALL email replies for an RFP (including DECLINE, QUESTION, PROPOSAL types) - use this to check vendor responses',
+        description: 'Get ALL email replies for an RFP (including DECLINE, QUESTION, PROPOSAL types) - use this to check vendor responses or replies what exactly the vendor replied!',
         parameters: {
             type: 'object',
             properties: {
@@ -189,20 +189,46 @@ export class AIActions {
         const vendors = args.vendors || [];
 
         try {
-            const result = await prisma.vendor.createMany({
-                data: vendors.map((vendor: any) => ({
-                    name: vendor.name,
-                    email: vendor.email,
-                    phone: vendor.phone,
-                    address: vendor.address,
-                })),
-                skipDuplicates: true,
-            });
+            // Use create instead of createMany to get the data back
+            const created = [];
+            for (const vendorData of vendors) {
+                try {
+                    const vendor = await prisma.vendor.create({
+                        data: {
+                            name: vendorData.name,
+                            email: vendorData.email,
+                            phone: vendorData.phone,
+                            address: vendorData.address,
+                        }
+                    });
+                    created.push({
+                        id: vendor.id,
+                        name: vendor.name,
+                        email: vendor.email
+                    });
+                } catch (e: any) {
+                    if (e.code === 'P2002') {
+                        const existing = await prisma.vendor.findUnique({
+                            where: { email: vendorData.email }
+                        });
+                        if (existing) {
+                            created.push({
+                                id: existing.id,
+                                name: existing.name,
+                                email: existing.email
+                            });
+                        }
+                    } else {
+                        throw e;
+                    }
+                }
+            }
 
             return {
                 total: vendors.length,
-                successful: result.count,
+                successful: created.length,
                 failed: 0,
+                vendors: created
             };
         } catch (error: any) {
             return {
@@ -222,24 +248,33 @@ export class AIActions {
         const rfps = args.rfps || [];
 
         try {
-            const result = await prisma.rFP.createMany({
-                data: rfps.map((rfpData: any) => ({
-                    title: rfpData.title,
-                    description: rfpData.description,
-                    requirements: rfpData.requirements || {},
-                    budget: parseFloat(rfpData.budget),
-                    currency: rfpData.currency || 'USD',
-                    deliveryDeadline: new Date(rfpData.deliveryDeadline),
-                    createdBy: rfpData.createdBy || undefined,
-                    status: 'DRAFT',
-                })),
-                skipDuplicates: true,
-            });
+            const created = [];
+            for (const rfpData of rfps) {
+                const rfp = await prisma.rFP.create({
+                    data: {
+                        title: rfpData.title || `RFP Request #${Date.now()}`,
+                        description: rfpData.description || 'RFP created via AI assistant',
+                        requirements: rfpData.requirements || {},
+                        budget: parseFloat(rfpData.budget),
+                        currency: rfpData.currency || 'USD',
+                        deliveryDeadline: new Date(rfpData.deliveryDeadline),
+                        createdBy: rfpData.createdBy || undefined,
+                        status: 'DRAFT',
+                    }
+                });
+                created.push({
+                    id: rfp.id,
+                    title: rfp.title,
+                    budget: rfp.budget,
+                    currency: rfp.currency
+                });
+            }
 
             return {
                 total: rfps.length,
-                successful: result.count,
+                successful: created.length,
                 failed: 0,
+                rfps: created
             };
         } catch (error: any) {
             return {

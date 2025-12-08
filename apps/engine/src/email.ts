@@ -23,6 +23,8 @@ export async function generateEmailTemplate(
     vendorEmail: string,
     customMessage?: string
 ): Promise<EmailTemplate> {
+    const axios = await import('axios');
+    
     const rfp = await prisma.rFP.findUnique({ where: { id: rfpId } });
     if (!rfp) {
         throw new Error('RFP not found');
@@ -51,40 +53,61 @@ export async function generateEmailTemplate(
         take: 3,
     });
 
-    let negotiationContext = '';
+    // Build context for AI
+    let partnershipHistory = '';
     if (historicalProposals.length > 0) {
         const pastDeals = historicalProposals.map((p: any) => {
             const pricing = p.pricing as any;
-            return `  - ${p.rfp.title}: ${pricing?.currency || p.rfp.currency} ${pricing?.total || 'N/A'}`;
+            return `- ${p.rfp.title}: ${pricing?.currency || p.rfp.currency} ${pricing?.total || 'N/A'}`;
         }).join('\n');
-        negotiationContext = `\n\nNote: We have successfully worked with you on:\n${pastDeals}\nWe look forward to continuing our partnership.`;
+        partnershipHistory = `\n\nPast successful collaborations with this vendor:\n${pastDeals}`;
     }
 
-    const emailBody = customMessage || `Dear ${vendor.name},
+    // If custom message provided, use it directly
+    if (customMessage) {
+        return {
+            subject: `RFP: ${rfp.title}`,
+            body: customMessage,
+            vendorEmail: vendor.email,
+            vendorName: vendor.name,
+        };
+    }
 
-We are inviting you to submit a proposal for the following requirement:
+    // Generate email using AI
+    const prompt = `Generate a professional, well-formatted RFP email invitation for a vendor.
 
-Title: ${rfp.title}
-Description: ${rfp.description}
+RFP Details:
+- Title: ${rfp.title}
+- Description: ${rfp.description}
+- Budget: ${rfp.currency} ${rfp.budget.toLocaleString()}
+- Delivery Deadline: ${rfp.deliveryDeadline.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
+- Requirements: ${JSON.stringify(rfp.requirements, null, 2)}
 
-Budget: ${rfp.currency} ${rfp.budget}
-Delivery Deadline: ${rfp.deliveryDeadline.toISOString().split('T')[0]}
-Payment Terms: To be discussed
+Vendor Details:
+- Name: ${vendor.name}
+- Email: ${vendorEmail}${partnershipHistory}
 
-Requirements:
-${JSON.stringify(rfp.requirements, null, 2)}
+Instructions:
+1. Write a professional, warm, and clear email
+2. Use proper formatting with sections and bullet points
+3. Include all RFP details in an organized manner
+4. If there's partnership history, acknowledge it warmly
+5. Ask vendor to reply with: pricing breakdown, delivery timeline, payment terms, warranty, and any special conditions
+6. Keep tone professional but friendly
+7. Sign off as "${rfp.createdBy || 'Procurement Team'}"
+8. Make it visually clean and easy to read
 
-Please reply to this email with your proposal including:
-- Pricing breakdown
-- Delivery timeline
-- Payment terms
-- Warranty details
-- Any special terms or conditions${negotiationContext}
+Return ONLY the email body text (no subject line, no JSON, just the email content).`;
 
-Looking forward to your response.
+    const response = await axios.default.post(
+        `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+        {
+            contents: [{ role: 'user', parts: [{ text: prompt }] }]
+        }
+    );
 
-Best regards,
-${rfp.createdBy || 'RFP Team'}`;
+    const emailBody = response.data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 
+        `Dear ${vendor.name},\n\nWe invite you to submit a proposal for: ${rfp.title}\n\nBudget: ${rfp.currency} ${rfp.budget}\nDeadline: ${rfp.deliveryDeadline.toLocaleDateString()}\n\nBest regards,\n${rfp.createdBy || 'Procurement Team'}`;
 
     return {
         subject: `RFP: ${rfp.title}`,
