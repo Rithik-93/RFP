@@ -44,7 +44,6 @@ model RFP {
   budget           Decimal   @db.Decimal(12, 2)
   currency         String    @default("USD")
   deliveryDeadline DateTime
-  paymentTerms     String?
   createdBy        String?
   status           RFPStatus @default(DRAFT)
   createdAt        DateTime  @default(now())
@@ -77,43 +76,60 @@ model Proposal {
   id              String         @id @default(uuid())
   rfpId           String
   vendorId        String
+  rfpReplyId      String?        @unique
   rawEmailContent String         @db.Text
-  parsedData      Json // AI-extracted structured data
-  pricing         Json // {total: number, breakdown: [...]}
-  terms           Json?
+  parsedData      Json
   attachments     Json[]
-  aiScore         Decimal?       @db.Decimal(5, 2)
-  aiAnalysis      Json?
   status          ProposalStatus @default(RECEIVED)
   receivedAt      DateTime       @default(now())
-  processedAt     DateTime?
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 
   // Relations
-  rfp    RFP    @relation(fields: [rfpId], references: [id], onDelete: Cascade)
-  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  rfp      RFP       @relation(fields: [rfpId], references: [id], onDelete: Cascade)
+  vendor   Vendor    @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  rfpReply RFPReply? @relation(fields: [rfpReplyId], references: [id])
 
   @@map("proposals")
 }
 
 model RFPVendor {
-  id          String          @id @default(uuid())
-  rfpId       String
-  vendorId    String
-  sentAt      DateTime?
-  openedAt    DateTime?
-  respondedAt DateTime?
-  status      RFPVendorStatus @default(PENDING)
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  id            String          @id @default(uuid())
+  rfpId         String
+  vendorId      String
+  sentMessageId String?
+  sentAt        DateTime?
+  openedAt      DateTime?
+  respondedAt   DateTime?
+  status        RFPVendorStatus @default(PENDING)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
 
-  // Relations
-  rfp    RFP    @relation(fields: [rfpId], references: [id], onDelete: Cascade)
-  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  rfp     RFP        @relation(fields: [rfpId], references: [id], onDelete: Cascade)
+  vendor  Vendor     @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  replies RFPReply[]
 
   @@unique([rfpId, vendorId])
   @@map("rfp_vendors")
+}
+
+model RFPReply {
+  id             String    @id @default(uuid())
+  rfpVendorId    String
+  emailMessageId String    @unique
+  inReplyTo      String
+  from           String
+  subject        String
+  body           String    @db.Text
+  type           ReplyType @default(PENDING)
+  parsedData     Json?
+  createdAt      DateTime  @default(now())
+  files          String[]
+
+  rfpVendor RFPVendor @relation(fields: [rfpVendorId], references: [id], onDelete: Cascade)
+  proposal  Proposal?
+
+  @@map("rfp_replies")
 }
 
 model EmailLog {
@@ -150,6 +166,15 @@ enum ProposalStatus {
   UNDER_REVIEW
   ACCEPTED
   REJECTED
+}
+
+enum ReplyType {
+  PENDING
+  PROPOSAL
+  QUESTION
+  CLARIFICATION
+  DECLINE
+  OTHER
 }
 
 enum RFPVendorStatus {

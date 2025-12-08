@@ -10,8 +10,7 @@ import axios from 'axios';
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:3003';
-const EMAIL_SERVICE_URL = process.env.EMAIL_SERVICE_URL || 'http://localhost:3004';
+const ENGINE_URL = process.env.ENGINE_URL || 'http://localhost:3000';
 
 app.use(cors());
 app.use(express.json());
@@ -41,7 +40,7 @@ app.post('/api/conversations', async (req: Request, res: Response) => {
             }
         });
 
-        const aiResponse = await axios.post(`${AI_SERVICE_URL}/api/chat`, {
+        const aiResponse = await axios.post(`${ENGINE_URL}/api/chat`, {
             message,
             history: []
         });
@@ -100,7 +99,7 @@ app.post('/api/conversations/:id/messages', async (req: Request, res: Response) 
         }));
 
         // Call AI with full history
-        const aiResponse = await axios.post(`${AI_SERVICE_URL}/api/chat`, {
+        const aiResponse = await axios.post(`${ENGINE_URL}/api/chat`, {
             message,
             history
         });
@@ -128,7 +127,19 @@ app.post('/api/conversations/:id/messages', async (req: Request, res: Response) 
     }
 });
 
-// Get conversation with messages
+app.get('/api/conversations', async (req: Request, res: Response) => {
+    try {
+        const conversations = await prisma.conversation.findMany({
+            orderBy: { updatedAt: 'desc' },
+            take: 50
+        });
+        res.json(conversations);
+    } catch (error: any) {
+        console.error('Get conversations error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 app.get('/api/conversations/:id', async (req: Request, res: Response) => {
     if (!req.params.id) {
         return res.status(400).json({ error: 'conversationId required' });
@@ -154,32 +165,49 @@ app.get('/api/conversations/:id', async (req: Request, res: Response) => {
     }
 });
 
-
-app.post('/api/rfps/direct', async (req: Request, res: Response) => {
+// Get all RFPs with statistics
+app.get('/api/rfps', async (req: Request, res: Response) => {
     try {
-        const { title, description, requirements, budget, currency, deliveryDeadline, paymentTerms, createdBy } = req.body;
-
-        if (!title || !description || !budget || !deliveryDeadline) {
-            return res.status(400).json({ error: 'title, description, budget, and deliveryDeadline required' });
-        }
-
-        const rfp = await prisma.rFP.create({
-            data: {
-                title,
-                description,
-                requirements: requirements || [],
-                budget: parseFloat(budget),
-                currency: currency || 'USD',
-                deliveryDeadline: new Date(deliveryDeadline),
-                paymentTerms: paymentTerms || undefined,
-                createdBy: createdBy || undefined,
-                status: 'DRAFT',
+        const rfps = await prisma.rFP.findMany({
+            include: {
+                vendors: {
+                    include: {
+                        vendor: true,
+                        replies: true
+                    }
+                },
+                proposals: {
+                    include: {
+                        vendor: true
+                    }
+                }
             },
+            orderBy: {
+                updatedAt: 'desc'
+            }
         });
 
-        res.json({ success: true, rfp });
+        const rfpsWithStats = rfps.map(rfp => ({
+            id: rfp.id,
+            title: rfp.title,
+            description: rfp.description,
+            budget: rfp.budget,
+            currency: rfp.currency,
+            status: rfp.status,
+            deliveryDeadline: rfp.deliveryDeadline,
+            createdAt: rfp.createdAt,
+            updatedAt: rfp.updatedAt,
+            stats: {
+                vendorsSent: rfp.vendors.length,
+                vendorsResponded: rfp.vendors.filter((v: any) => v.status === 'RESPONDED').length,
+                proposalsReceived: rfp.proposals.length,
+                repliesTotal: rfp.vendors.reduce((acc: number, v: any) => acc + v.replies.length, 0)
+            }
+        }));
+
+        res.json(rfpsWithStats);
     } catch (error: any) {
-        console.error('Direct create RFP error:', error);
+        console.error('Get RFPs error:', error);
         res.status(500).json({ error: error.message });
     }
 });
@@ -193,7 +221,7 @@ app.post('/api/rfps', async (req: Request, res: Response) => {
         }
 
         // Call AI service to parse RFP
-        const aiResponse = await axios.post(`${AI_SERVICE_URL}/api/parse-rfp`, {
+        const aiResponse = await axios.post(`${ENGINE_URL}/api/parse-rfp`, {
             message
         });
 
@@ -214,7 +242,6 @@ app.post('/api/rfps', async (req: Request, res: Response) => {
                 budget: parsed.budget,
                 currency: parsed.currency || 'USD',
                 deliveryDeadline: new Date(parsed.deliveryDeadline),
-                paymentTerms: parsed.paymentTerms,
                 createdBy: createdBy || undefined,
                 status: 'DRAFT',
             },
@@ -223,31 +250,6 @@ app.post('/api/rfps', async (req: Request, res: Response) => {
         res.json({ success: true, rfp });
     } catch (error: any) {
         console.error('Create RFP error:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.get('/api/rfps', async (req: Request, res: Response) => {
-    try {
-        const rfps = await prisma.rFP.findMany({
-            orderBy: { createdAt: 'desc' },
-        });
-        res.json(rfps);
-    } catch (error: any) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.get('/api/proposals', async (req: Request, res: Response) => {
-    try {
-        const { rfpId } = req.query;
-        const proposals = await prisma.proposal.findMany({
-            where: rfpId ? { rfpId: rfpId as string } : {},
-            include: { vendor: true, rfp: true },
-            orderBy: { createdAt: 'desc' },
-        });
-        res.json(proposals);
-    } catch (error: any) {
         res.status(500).json({ error: error.message });
     }
 });
@@ -290,45 +292,20 @@ app.post('/api/rfps/:id/send', async (req: Request, res: Response) => {
     try {
         const { vendorEmails } = req.body;
         if (!vendorEmails || !Array.isArray(vendorEmails) || !req.params.id) {
-            return res.status(400).json({ error: 'vendorEmails array required' });
+            return res.status(400).json({ error: 'vendorEmails and RFP id required' });
         }
         const rfp = await prisma.rFP.findUnique({ where: { id: req.params.id } });
         if (!rfp) {
             return res.status(404).json({ error: 'RFP not found' });
         }
-        const vendors = await prisma.vendor.findMany({
-            where: { email: { in: vendorEmails } }
-        });
-        const emailResponse = await axios.post(`${EMAIL_SERVICE_URL}/api/send`, {
-            to: vendorEmails,
-            subject: `RFP: ${rfp.title}`,
-            body: `${rfp.description}\n\nBudget: ${rfp.budget} ${rfp.currency}\nDeadline: ${rfp.deliveryDeadline}`
-        });
-        const emailResult = await emailResponse.data;
-        res.json({ success: true, emailResult });
-    } catch (error: any) {
-        console.error('Send RFP error:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
 
-// Send RFP to vendors
-app.post('/api/rfps/:id/send', async (req: Request, res: Response) => {
-    try {
-        const { vendorIds } = req.body;
-
-        if (!vendorIds || !Array.isArray(vendorIds)) {
-            return res.status(400).json({ error: 'vendorIds array required' });
-        }
-
-        // Call email service
-        const emailResponse = await axios.post(`${EMAIL_SERVICE_URL}/api/send-rfp`, {
-            rfpId: req.params.id,
-            vendorIds
+        // Engine handles email sending via AI function calls
+        const response = await axios.post(`${ENGINE_URL}/api/send-rfp`, {
+            rfpId: rfp.id,
+            vendorEmails
         });
 
-        const result = await emailResponse.data;
-        res.json(result);
+        res.json(response.data);
     } catch (error: any) {
         console.error('Send RFP error:', error);
         res.status(500).json({ error: error.message });
@@ -374,103 +351,53 @@ app.get('/api/vendors', async (req: Request, res: Response) => {
     }
 });
 
+
 // ========== PROPOSAL ENDPOINTS ==========
 
-// Submit proposal (vendor response)
-app.post('/api/proposals', async (req: Request, res: Response) => {
+app.post('/api/chat', async (req: Request, res: Response) => {
     try {
-        const { rfpId, vendorId, emailContent } = req.body;
-
-        if (!rfpId || !vendorId || !emailContent) {
-            return res.status(400).json({ error: 'rfpId, vendorId, emailContent required' });
-        }
-
-        // Get RFP context
-        const rfp = await prisma.rFP.findUnique({ where: { id: rfpId } });
-        if (!rfp) {
-            return res.status(404).json({ error: 'RFP not found' });
-        }
-
-        // Parse proposal with AI
-        const aiResponse = await axios.post(`${AI_SERVICE_URL}/api/parse-proposal`, {
-            emailContent,
-            rfpContext: rfp
+        const { message, history } = req.body;
+        const response = await axios.post(`${ENGINE_URL}/api/chat`, {
+            message,
+            history: history || []
         });
-
-        const aiResult = await aiResponse.data;
-
-        if (!aiResult.success) {
-            return res.status(400).json({ error: 'Failed to parse proposal', details: aiResult.error });
-        }
-
-        const parsed = aiResult.data;
-
-        // Create proposal
-        const proposal = await prisma.proposal.create({
-            data: {
-                rfpId,
-                vendorId,
-                rawEmailContent: emailContent,
-                parsedData: parsed,
-                pricing: parsed.pricing,
-                terms: parsed.terms,
-                attachments: [],
-                aiScore: parsed.completeness,
-                status: 'RECEIVED',
-            },
-        });
-
-        // Update RFPVendor status
-        await prisma.rFPVendor.updateMany({
-            where: { rfpId, vendorId },
-            data: {
-                status: 'RESPONDED',
-                respondedAt: new Date(),
-            },
-        });
-
-        res.json({ success: true, proposal });
+        res.json(response.data);
     } catch (error: any) {
-        console.error('Submit proposal error:', error);
+        console.error('Chat error:', error);
         res.status(500).json({ error: error.message });
     }
 });
 
-// Get AI recommendation for RFP
-app.get('/api/rfps/:id/recommendation', async (req: Request, res: Response) => {
+app.patch('/api/proposals/:id/status', async (req: Request, res: Response) => {
     try {
-        if (!req.params.id) {
-            return res.status(400).json({ error: 'RFP ID required' });
+        const { status } = req.body;
+        if (!status || !req.params.id) {
+            return res.status(400).json({ error: 'status and id required' });
         }
-        const rfp = await prisma.rFP.findUnique({
+        const proposal = await prisma.proposal.update({
             where: { id: req.params.id },
-            include: {
-                proposals: {
-                    include: {
-                        vendor: true,
-                    },
-                },
-            },
+            data: { status }
         });
-
-        if (!rfp) {
-            return res.status(404).json({ error: 'RFP not found' });
-        }
-
-        if (rfp.proposals.length === 0) {
-            return res.status(400).json({ error: 'No proposals to compare' });
-        }
-
-        // Get AI recommendation
-        const aiResponse = await axios.post(`${AI_SERVICE_URL}/api/recommend`, {
-            proposals: rfp.proposals,
-            rfp
-        });
-
-        const result = await aiResponse.data;
-        res.json(result);
+        res.json({ success: true, proposal });
     } catch (error: any) {
-        console.error('Get recommendation error:', error);
+        console.error('Update proposal status error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.patch('/api/rfps/:id/status', async (req: Request, res: Response) => {
+    try {
+        const { status } = req.body;
+        if (!status || !req.params.id) {
+            return res.status(400).json({ error: 'status and id required' });
+        }
+        const rfp = await prisma.rFP.update({
+            where: { id: req.params.id },
+            data: { status }
+        });
+        res.json({ success: true, rfp });
+    } catch (error: any) {
+        console.error('Update RFP status error:', error);
         res.status(500).json({ error: error.message });
     }
 });
