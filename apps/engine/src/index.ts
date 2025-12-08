@@ -8,7 +8,7 @@ import { gmailWebhook } from './webhook';
 dotenv.config({ path: '../../.env' });
 
 // Validate required environment variables
-const requiredEnvVars: string[] = ['GEMINI_API_KEY', 'PORT', 'ENGINE_URL'];
+const requiredEnvVars: string[] = ['GEMINI_API_KEY', 'ENGINE_PORT', 'ENGINE_URL'];
 
 for (const envVar of requiredEnvVars) {
     if (!process.env[envVar]) {

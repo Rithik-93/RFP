@@ -8,9 +8,13 @@ import { prisma } from '@rfp/database';
 import axios from 'axios';
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.GATEWAY_PORT;
 
-const ENGINE_URL = process.env.ENGINE_URL || 'http://localhost:3000';
+const ENGINE_URL = process.env.ENGINE_URL;
+
+if (!process.env.GATEWAY_PORT || !ENGINE_URL) {
+    throw new Error('Missing environment variables');
+}
 
 app.use(cors());
 app.use(express.json());
