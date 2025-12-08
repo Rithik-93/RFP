@@ -208,7 +208,7 @@ export const processNewMessagesFromHistory = async (
                         // Send to AI processing endpoint
                         try {
                             const axios = await import('axios');
-                            const processResponse = await axios.default.post(`${config.engineUrl}/process-email-reply`, {
+                            const processResponse = await axios.default.post(`${config.engineUrl}/api/process-email-reply`, {
                                 emailMessageId: emailData.id,
                                 inReplyTo: emailData.inReplyTo,
                                 from: emailData.from,
