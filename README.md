@@ -81,7 +81,7 @@ cd apps/engine && pnpm dev
 ### Backend
 
 - **Gateway**: Express + Prisma + Zod validation
-- **AI Engine**: Express + Google Gemini 1.5 Flash with function calling
+- **AI Engine**: Express + Google Gemini 2.5 Flash with function calling
 - **Database**: PostgreSQL with Prisma ORM
 
 ### Email Integration
