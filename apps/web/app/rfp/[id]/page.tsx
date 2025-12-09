@@ -372,7 +372,9 @@ export default function RFPDetailPage({ params }: { params: Promise<{ id: string
                                         {parsed?.timeline && (
                                             <div style={{ marginBottom: '12px' }}>
                                                 <div style={{ fontSize: '0.75rem', color: 'rgba(233, 213, 255, 0.6)', marginBottom: '4px' }}>Timeline</div>
-                                                <div style={{ fontSize: '0.9rem', color: '#e9d5ff' }}>{parsed.timeline}</div>
+                                                <div style={{ fontSize: '0.9rem', color: '#e9d5ff' }}>
+                                                    {typeof parsed.timeline === 'object' ? parsed.timeline.delivery || JSON.stringify(parsed.timeline) : parsed.timeline}
+                                                </div>
                                             </div>
                                         )}
 

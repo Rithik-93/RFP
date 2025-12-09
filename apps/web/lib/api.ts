@@ -32,23 +32,6 @@ export async function createVendor(data: any) {
     return res.data;
 }
 
-export async function submitProposal(data: any) {
-    const res = await axios.post(`${API_URL}/api/proposals`, data);
-    return res.data;
-}
-
-export async function getRecommendation(rfpId: string) {
-    const res = await axios.get(`${API_URL}/api/rfps/${rfpId}/recommendation`);
-    return res.data;
-}
-
-export async function getEvaluation(rfpId: string) {
-    const res = await axios.post(`${API_URL}/api/chat`, {
-        message: `evaluate proposals for RFP ${rfpId}`,
-    });
-    return res.data;
-}
-
 export async function updateProposalStatus(proposalId: string, status: string) {
     const res = await axios.patch(`${API_URL}/api/proposals/${proposalId}/status`, { status });
     return res.data;

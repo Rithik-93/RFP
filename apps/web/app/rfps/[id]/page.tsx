@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { getRFP, getVendors, sendRFP, getRecommendation } from '@/lib/api';
+import { getRFP, getVendors, sendRFP } from '@/lib/api';
 
 export default function RFPDetailPage() {
     const params = useParams();
@@ -10,7 +10,6 @@ export default function RFPDetailPage() {
     const [rfp, setRfp] = useState<any>(null);
     const [vendors, setVendors] = useState<any[]>([]);
     const [selectedVendors, setSelectedVendors] = useState<string[]>([]);
-    const [recommendation, setRecommendation] = useState<any>(null);
     const [loading, setLoading] = useState(true);
     const [sending, setSending] = useState(false);
 
@@ -26,18 +25,6 @@ export default function RFPDetailPage() {
             ]);
             setRfp(rfpData);
             setVendors(vendorsData);
-
-            // Load recommendation if proposals exist
-            if (rfpData.proposals && rfpData.proposals.length > 0) {
-                try {
-                    const rec = await getRecommendation(params.id as string);
-                    if (rec.success) {
-                        setRecommendation(rec.data);
-                    }
-                } catch (err) {
-                    console.log('No recommendation yet');
-                }
-            }
         } catch (error) {
             console.error('Failed to load:', error);
         } finally {
@@ -215,25 +202,6 @@ export default function RFPDetailPage() {
                         </div>
                     )}
 
-                    {recommendation && (
-                        <div style={{
-                            padding: '20px',
-                            backgroundColor: '#fef3c7',
-                            borderRadius: '10px',
-                            border: '2px solid #fbbf24'
-                        }}>
-                            <h3 style={{ marginBottom: '15px' }}>🤖 AI Recommendation</h3>
-                            <p style={{ marginBottom: '10px' }}><strong>Recommended Vendor:</strong> {recommendation.recommendedVendor}</p>
-                            <p style={{ marginBottom: '10px' }}><strong>Score:</strong> {recommendation.score}/100</p>
-                            <p style={{ marginBottom: '10px' }}><strong>Reasoning:</strong> {recommendation.reasoning}</p>
-                            <p><strong>Risk Level:</strong> <span style={{
-                                padding: '4px 12px',
-                                backgroundColor: recommendation.riskAssessment === 'LOW' ? '#d1fae5' : recommendation.riskAssessment === 'MEDIUM' ? '#fef3c7' : '#fee2e2',
-                                borderRadius: '12px',
-                                fontWeight: 'bold'
-                            }}>{recommendation.riskAssessment}</span></p>
-                        </div>
-                    )}
                 </div>
             </div>
         </div>
